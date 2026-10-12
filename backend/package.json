@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
+    "package:lambda": "tar -a -cf lambda-deployment.zip src node_modules lambda.js package.json",
     "setup:aws": "node scripts/setup-aws-resources.js",
     "assign-teacher": "node scripts/assign-teacher-role.js"
   },
@@ -19,6 +20,7 @@
     "@aws-sdk/client-sns": "^3.1147.0",
     "@aws-sdk/lib-dynamodb": "^3.1148.0",
     "@aws-sdk/s3-request-presigner": "^3.1147.0",
+    "@codegenie/serverless-express": "^5.0.0",
     "aws-jwt-verify": "^5.2.1",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",

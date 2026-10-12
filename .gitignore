@@ -25,6 +25,7 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 *.log
+*.zip
 dump.html
 chrome_err.log
 
