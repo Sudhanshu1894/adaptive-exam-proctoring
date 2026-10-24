@@ -59,10 +59,22 @@ async function deploy() {
         ZipFile: zipBuffer,
       })
     );
-    console.log(`✅ Function code updated successfully! (Status: ${updateCodeRes.LastUpdateStatus})`);
+    console.log(`✅ Function code upload initiated! (Status: ${updateCodeRes.LastUpdateStatus})`);
   } catch (err) {
     console.error('❌ Failed to update Lambda code:', err.message);
     process.exit(1);
+  }
+
+  // Wait for Lambda update to finish
+  let status = 'InProgress';
+  while (status === 'InProgress') {
+    await new Promise((r) => setTimeout(r, 2000));
+    try {
+      const fn = await lambdaClient.send(new GetFunctionCommand({ FunctionName: functionName }));
+      status = fn.Configuration?.LastUpdateStatus || 'Successful';
+    } catch {
+      break;
+    }
   }
 
   // 3. Update Lambda Environment variables to ensure SNS Topic ARN is configured
