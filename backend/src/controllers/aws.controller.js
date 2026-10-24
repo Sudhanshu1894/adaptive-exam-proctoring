@@ -1,4 +1,5 @@
 import awsServices from '../services/aws/index.js';
+import { setUserConfirmationStatus } from '../services/user.service.js';
 
 const { s3, rekognition, cognito, lambda, sns, getStatus } = awsServices;
 
@@ -239,7 +240,8 @@ export const cognitoConfirmHandler = async (req, res, next) => {
       });
     }
 
-    const result = await cognito.confirmCognitoUser({ email, code });
+    const cleanEmail = email.trim().toLowerCase();
+    const result = await cognito.confirmCognitoUser({ email: cleanEmail, code });
     if (!result.success) {
       return res.status(400).json({
         success: false,
@@ -247,9 +249,45 @@ export const cognitoConfirmHandler = async (req, res, next) => {
       });
     }
 
+    await setUserConfirmationStatus(cleanEmail, true);
+
     res.json({
       success: true,
       message: 'AWS Cognito account confirmed successfully! You can now sign in.',
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * POST /api/aws/cognito/admin-confirm
+ * Confirms user directly in Cognito and DB (useful when Cognito email delivery is throttled or lands in spam)
+ */
+export const cognitoAdminConfirmHandler = async (req, res, next) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Email address is required.' },
+      });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const result = await cognito.adminConfirmCognitoUser({ email: cleanEmail });
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        error: { message: result.error || 'Failed to confirm account.' },
+      });
+    }
+
+    await setUserConfirmationStatus(cleanEmail, true);
+
+    res.json({
+      success: true,
+      message: 'Account confirmed successfully! You can now sign in.',
     });
   } catch (err) {
     next(err);
@@ -297,5 +335,6 @@ export default {
   evaluateIncidentWithLambdaHandler,
   cognitoAuthHandler,
   cognitoConfirmHandler,
+  cognitoAdminConfirmHandler,
   cognitoResendCodeHandler,
 };

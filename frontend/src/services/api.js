@@ -176,4 +176,8 @@ export const apiGetReferenceStatus = async () => apiClient.get('/exams/student/r
 export const apiAnalyzeProctoringFrame = async (attemptId, payload) => apiClient.post(`/exams/student/attempt/${attemptId}/proctor-frame`, payload);
 export const apiGetAttemptProctoringStatus = async (attemptId) => apiClient.get(`/exams/student/attempt/${attemptId}/proctor-status`);
 
+export const apiConfirmCognitoAccount = async (email, code) => apiClient.post('/aws/cognito/confirm', { email, code });
+export const apiAdminConfirmCognitoAccount = async (email) => apiClient.post('/aws/cognito/admin-confirm', { email });
+export const apiResendCognitoCode = async (email) => apiClient.post('/aws/cognito/resend-code', { email });
+
 export default apiClient;

@@ -6,13 +6,15 @@ import { SNSClient } from '@aws-sdk/client-sns';
 import { env } from './env.js';
 
 const isLiveConfigured = Boolean(
-  env.AWS_ACCESS_KEY_ID &&
-  env.AWS_SECRET_ACCESS_KEY &&
-  !env.AWS_ACCESS_KEY_ID.includes('YOUR_') &&
-  !env.AWS_ACCESS_KEY_ID.includes('dummy')
+  (env.AWS_ACCESS_KEY_ID &&
+    env.AWS_SECRET_ACCESS_KEY &&
+    !env.AWS_ACCESS_KEY_ID.includes('YOUR_') &&
+    !env.AWS_ACCESS_KEY_ID.includes('dummy')) ||
+  process.env.AWS_EXECUTION_ENV ||
+  process.env.LAMBDA_TASK_ROOT
 );
 
-const awsCredentials = isLiveConfigured
+const awsCredentials = isLiveConfigured && env.AWS_ACCESS_KEY_ID
   ? {
       accessKeyId: env.AWS_ACCESS_KEY_ID,
       secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
@@ -21,7 +23,7 @@ const awsCredentials = isLiveConfigured
   : undefined;
 
 const clientConfig = {
-  region: env.AWS_REGION || 'us-east-1',
+  region: env.AWS_REGION || 'ap-south-1',
   ...(awsCredentials ? { credentials: awsCredentials } : {}),
 };
 
@@ -45,12 +47,12 @@ try {
 export const isAwsConfigured = () => isLiveConfigured;
 
 export const awsConfig = {
-  region: env.AWS_REGION || 'us-east-1',
-  s3Bucket: env.AWS_S3_BUCKET || 'adaptive-exam-proctoring-evidence',
-  cognitoUserPoolId: env.AWS_COGNITO_USER_POOL_ID || 'us-east-1_mockPoolId',
-  cognitoClientId: env.AWS_COGNITO_CLIENT_ID || 'mockCognitoClientId',
-  lambdaFunctionArn: env.AWS_LAMBDA_EVALUATOR_ARN || 'arn:aws:lambda:us-east-1:123456789012:function:proctoring-incident-evaluator',
-  snsTopicArn: env.AWS_SNS_TOPIC_ARN || 'arn:aws:sns:us-east-1:123456789012:proctor-high-risk-alerts',
+  region: env.AWS_REGION || 'ap-south-1',
+  s3Bucket: env.AWS_S3_BUCKET || 'adaptive-exam-proctoring-evidence-019711414548-ap-south-1-an',
+  cognitoUserPoolId: env.AWS_COGNITO_USER_POOL_ID || 'ap-south-1_zSvNBA2w9',
+  cognitoClientId: env.AWS_COGNITO_CLIENT_ID || '1oqqmtfarh9pojfgfupblu803h',
+  lambdaFunctionArn: env.AWS_LAMBDA_EVALUATOR_ARN || 'arn:aws:lambda:ap-south-1:019711414548:function:adaptive-exam-proctoring-processor',
+  snsTopicArn: env.AWS_SNS_TOPIC_ARN || 'arn:aws:sns:ap-south-1:019711414548:adaptive-exam-proctoring-alerts',
   isLive: isLiveConfigured,
 };
 

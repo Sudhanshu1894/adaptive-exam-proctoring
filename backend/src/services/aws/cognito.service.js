@@ -5,6 +5,8 @@ import {
   AdminInitiateAuthCommand,
   ConfirmSignUpCommand,
   ResendConfirmationCodeCommand,
+  AdminGetUserCommand,
+  AdminConfirmSignUpCommand,
 } from '@aws-sdk/client-cognito-identity-provider';
 import { cognitoClient, awsConfig, isAwsConfigured } from '../../config/aws.config.js';
 
@@ -161,9 +163,59 @@ export const resendCognitoCode = async ({ email }) => {
   return { success: true, destination: email };
 };
 
+/**
+ * Inspect user status in Amazon Cognito User Pool
+ */
+export const getCognitoUserStatus = async ({ email }) => {
+  if (cognitoClient && awsConfig.cognitoUserPoolId) {
+    try {
+      const command = new AdminGetUserCommand({
+        UserPoolId: awsConfig.cognitoUserPoolId,
+        Username: email.trim().toLowerCase(),
+      });
+      const response = await cognitoClient.send(command);
+      return {
+        exists: true,
+        status: response.UserStatus, // 'UNCONFIRMED', 'CONFIRMED', etc.
+        enabled: response.Enabled,
+        email: response.UserAttributes?.find((a) => a.Name === 'email')?.Value || email,
+      };
+    } catch (err) {
+      if (err.name === 'UserNotFoundException') {
+        return { exists: false, status: 'NOT_FOUND' };
+      }
+      console.warn('[AWS Cognito GetUser Status]:', err.message);
+      return { exists: null, error: err.message };
+    }
+  }
+  return { exists: true, status: 'CONFIRMED' };
+};
+
+/**
+ * Admin confirmation for users when Cognito email OTP delivery is delayed/blocked
+ */
+export const adminConfirmCognitoUser = async ({ email }) => {
+  if (cognitoClient && awsConfig.cognitoUserPoolId) {
+    try {
+      const command = new AdminConfirmSignUpCommand({
+        UserPoolId: awsConfig.cognitoUserPoolId,
+        Username: email.trim().toLowerCase(),
+      });
+      await cognitoClient.send(command);
+      return { success: true, message: 'Account confirmed by administrator in AWS Cognito.' };
+    } catch (err) {
+      console.warn('[AWS Cognito AdminConfirm Error]:', err.message);
+      return { success: false, error: err.message };
+    }
+  }
+  return { success: true, message: 'Simulated admin confirmation.' };
+};
+
 export default {
   registerWithCognito,
   authenticateWithCognito,
   confirmCognitoUser,
   resendCognitoCode,
+  getCognitoUserStatus,
+  adminConfirmCognitoUser,
 };

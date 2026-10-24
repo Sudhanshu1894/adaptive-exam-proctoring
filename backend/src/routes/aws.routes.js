@@ -9,6 +9,7 @@ import {
   evaluateIncidentWithLambdaHandler,
   cognitoAuthHandler,
   cognitoConfirmHandler,
+  cognitoAdminConfirmHandler,
   cognitoResendCodeHandler,
 } from '../controllers/aws.controller.js';
 import { protect } from '../middleware/auth.middleware.js';
@@ -33,6 +34,7 @@ router.post('/lambda/evaluate-incident', protect, evaluateIncidentWithLambdaHand
 // Amazon Cognito: Identity exchange & Account confirmation
 router.post('/cognito/auth', cognitoAuthHandler);
 router.post('/cognito/confirm', cognitoConfirmHandler);
+router.post('/cognito/admin-confirm', cognitoAdminConfirmHandler);
 router.post('/cognito/resend-code', cognitoResendCodeHandler);
 
 export default router;

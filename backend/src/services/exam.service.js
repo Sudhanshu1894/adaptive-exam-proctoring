@@ -1295,15 +1295,39 @@ export const analyzeProctoringFrame = async (
   }
 
   // 5. Check SNS Alert Escalation
-  const alertCheck = evaluateSnsAlertTrigger(attempt, attempt.riskScore || 0, 'FRAME_EVALUATION');
+  let frameBreachEvent = null;
+  let breachDetails = '';
+  if (phoneDetected) {
+    frameBreachEvent = 'PHONE_DETECTED';
+    breachDetails = `Prohibited mobile device identified (${phoneLabel || 'Phone'}, ${phoneConfidence}% confidence)`;
+  } else if (faceStatus === 'MULTIPLE_FACES' || faceCount > 1) {
+    frameBreachEvent = 'MULTIPLE_FACES';
+    breachDetails = `Multiple faces (${faceCount}) identified in camera feed`;
+  } else if (isSustainedAbsence) {
+    frameBreachEvent = 'SUSTAINED_ABSENCE';
+    breachDetails = `Candidate absence confirmed (${Math.round(absenceDurationMs / 1000)}s)`;
+  } else if (faceStatus === 'FACE_MISMATCH') {
+    frameBreachEvent = 'IDENTITY_MISMATCH';
+    breachDetails = 'Facial biometric mismatch detected against baseline reference';
+  } else if (clientMetrics && clientMetrics.tabSwitchCount > (attempt.tabSwitchCount || 0)) {
+    frameBreachEvent = 'TAB_SWITCH';
+    breachDetails = `Browser window blur or tab switch detected (count: ${clientMetrics.tabSwitchCount})`;
+  }
+
+  const alertCheck = evaluateSnsAlertTrigger(
+    attempt,
+    attempt.riskScore || 0,
+    frameBreachEvent || 'FRAME_EVALUATION'
+  );
+
   if (alertCheck.shouldAlert) {
     sendHighRiskProctorAlert({
       studentName: attempt.studentName || 'Candidate',
       examTitle: attempt.examTitle || 'Examination',
       riskScore: attempt.riskScore,
-      breachType: 'HIGH_RISK_ESCALATION',
-      details: alertCheck.reason,
-    }).catch(() => null);
+      breachType: frameBreachEvent || 'HIGH_RISK_ESCALATION',
+      details: breachDetails ? `${alertCheck.reason} - ${breachDetails}` : alertCheck.reason,
+    }).catch((err) => console.warn('[Amazon SNS Publish Warning]:', err.message));
   }
 
   // Save latest proctoring snapshot state

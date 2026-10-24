@@ -18,9 +18,10 @@ import { ROLES, normalizeRole, isTeacherRole } from '../utils/roles.js';
 export const register = async (req, res, next) => {
   try {
     const { name, email, password, role, studentId, department } = req.body;
+    const cleanEmail = email.trim().toLowerCase();
 
     // Check if user already exists
-    const existingUser = await findUserByEmail(email);
+    const existingUser = await findUserByEmail(cleanEmail);
     if (existingUser) {
       return res.status(409).json({
         success: false,
@@ -35,7 +36,7 @@ export const register = async (req, res, next) => {
     let cognitoResult = null;
     try {
       cognitoResult = await cognitoService.registerWithCognito({
-        email: email.trim().toLowerCase(),
+        email: cleanEmail,
         password,
         name: name.trim(),
         role: role || 'student',
@@ -45,25 +46,31 @@ export const register = async (req, res, next) => {
       console.warn('[AWS Cognito SignUp Notice]:', cogErr.message);
     }
 
+    const isConfirmed = cognitoResult?.userConfirmed === true;
+
     // Create user in primary database store
     const newUser = await createUser({
       name: name.trim(),
-      email: email.trim().toLowerCase(),
+      email: cleanEmail,
       password,
       role: role || 'student',
       studentId: studentId ? studentId.trim() : null,
       department: department ? department.trim() : null,
       cognitoSub: cognitoResult?.userSub || null,
+      isConfirmed,
     });
 
-    // Generate token
-    const token = generateToken(newUser._id, newUser.role);
+    // Only issue JWT token if already confirmed
+    const token = isConfirmed ? generateToken(newUser._id, newUser.role) : null;
 
     res.status(201).json({
       success: true,
-      message: 'Account created successfully with Amazon Cognito & Database synchronization.',
+      message: isConfirmed
+        ? 'Account created successfully.'
+        : 'Account created! Please check your email for the 6-digit confirmation code.',
       data: {
         token,
+        isConfirmed,
         cognito: {
           userPoolId: awsConfig.cognitoUserPoolId,
           clientId: awsConfig.cognitoClientId,
@@ -93,33 +100,74 @@ export const register = async (req, res, next) => {
  */
 export const login = async (req, res, next) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, role: requestedRole } = req.body;
+    const cleanEmail = (email || '').trim().toLowerCase();
 
-    let user = await findUserByEmail(email, true);
+    let user = await findUserByEmail(cleanEmail, true);
+
+    // Verify confirmation status in Amazon Cognito User Pool
+    const cognitoStatus = await cognitoService.getCognitoUserStatus({ email: cleanEmail });
 
     if (!user) {
-      // Auto-provision candidate/user seamlessly on their first login so they are never blocked
-      const requestedRole = req.body.role || (email.toLowerCase().includes('teacher') ? 'teacher' : 'student');
-      const displayName = email.split('@')[0];
-      user = await createUser({
-        name: displayName,
-        email: email.trim().toLowerCase(),
-        password,
-        role: requestedRole,
-        studentId: requestedRole === 'student' ? `STU-${Date.now().toString(36).toUpperCase()}` : undefined,
-        department: 'School of Technology',
-      });
-      console.log(`[Auth]: Auto-provisioned user ${email} (${requestedRole})`);
-    } else {
-      // Verify password if set
-      const isMatch = user.password ? await verifyPassword(password, user.password) : true;
-      if (!isMatch && user.password) {
-        // Seamlessly update password so the user is never locked out with 'Create an account'
-        console.log(`[Auth]: Updating password for user ${email}`);
-        await updateUserPassword(user.email, password);
+      if (cognitoStatus.exists && cognitoStatus.status === 'UNCONFIRMED') {
+        return res.status(403).json({
+          success: false,
+          isUnconfirmed: true,
+          error: {
+            code: 'UserNotConfirmedException',
+            message: 'Your account has not been confirmed yet. Please verify your email with the 6-digit confirmation code.',
+            statusCode: 403,
+          },
+        });
       }
+
+      return res.status(401).json({
+        success: false,
+        error: {
+          message: 'No account found with this email address. Please create an account first.',
+          statusCode: 401,
+        },
+      });
     }
 
+    // 1. Strict Cognito confirmation enforcement
+    if (cognitoStatus.exists && cognitoStatus.status === 'UNCONFIRMED') {
+      return res.status(403).json({
+        success: false,
+        isUnconfirmed: true,
+        error: {
+          code: 'UserNotConfirmedException',
+          message: 'Your account has not been confirmed yet. Please verify your email with the 6-digit confirmation code.',
+          statusCode: 403,
+        },
+      });
+    }
+
+    if (user.isConfirmed === false && (!cognitoStatus.exists || cognitoStatus.status === 'UNCONFIRMED')) {
+      return res.status(403).json({
+        success: false,
+        isUnconfirmed: true,
+        error: {
+          code: 'UserNotConfirmedException',
+          message: 'Your account has not been confirmed yet. Please verify your email with the 6-digit confirmation code.',
+          statusCode: 403,
+        },
+      });
+    }
+
+    // 2. Strict password verification
+    const isMatch = user.password ? await verifyPassword(password, user.password) : false;
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        error: {
+          message: 'Incorrect email or password. Please verify your credentials.',
+          statusCode: 401,
+        },
+      });
+    }
+
+    // 3. Account active status
     if (!user.isActive) {
       return res.status(403).json({
         success: false,
@@ -130,11 +178,23 @@ export const login = async (req, res, next) => {
       });
     }
 
+    // 4. Role alignment check
+    if (requestedRole === 'teacher' && user.role !== 'teacher' && user.role !== 'proctor') {
+      return res.status(403).json({
+        success: false,
+        error: {
+          code: 'ROLE_MISMATCH',
+          message: 'Access Denied: This account is registered as a student. Please sign in via the Student portal.',
+          statusCode: 403,
+        },
+      });
+    }
+
     // Authenticate with Amazon Cognito
     let cognitoSession = null;
     try {
       cognitoSession = await cognitoService.authenticateWithCognito({
-        email,
+        email: cleanEmail,
         password,
       });
     } catch (cogErr) {

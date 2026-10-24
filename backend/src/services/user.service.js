@@ -238,6 +238,7 @@ export const createUser = async ({
     rollNo: studentId || null,
     status: finalRole === ROLES.TEACHER ? 'active' : 'enrolled',
     isActive: true,
+    isConfirmed: isConfirmed ?? (finalRole === ROLES.TEACHER || false),
     faceIds: [],
     baselineImageKeys: [],
     createdAt: new Date().toISOString(),
@@ -248,6 +249,22 @@ export const createUser = async ({
   await dynamoService.putStudent(newUser);
 
   return newUser;
+};
+
+export const setUserConfirmationStatus = async (email, isConfirmed) => {
+  const normalized = (email || '').trim().toLowerCase();
+  const user = await findUserByEmail(normalized);
+  if (user) {
+    user.isConfirmed = isConfirmed;
+    if (isConfirmed && user.status === 'unconfirmed') {
+      user.status = user.role === ROLES.TEACHER ? 'active' : 'enrolled';
+    }
+    user.updatedAt = new Date().toISOString();
+    memoryUsers.set(normalized, user);
+    await dynamoService.putStudent(user);
+    return user;
+  }
+  return null;
 };
 
 export const verifyPassword = async (plainPassword, hashedPassword) => {

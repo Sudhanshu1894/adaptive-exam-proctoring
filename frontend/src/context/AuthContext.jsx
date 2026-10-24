@@ -14,6 +14,8 @@ import {
   apiRegister,
   apiValidateCognitoSession,
   apiExchangeCognitoCode,
+  apiConfirmCognitoAccount,
+  apiAdminConfirmCognitoAccount,
 } from '../services/api';
 
 const AuthContext = createContext(null);
@@ -215,12 +217,20 @@ export const AuthProvider = ({ children }) => {
       } catch (backendErr) {
         handleLogoutClean();
         setIsLoading(false);
+        const isUnconfirmed =
+          backendErr.response?.data?.isUnconfirmed === true ||
+          backendErr.response?.data?.error?.code === 'UserNotConfirmedException';
         const backendMsg =
           backendErr.response?.data?.error?.message ||
           backendErr.message ||
           "We couldn't sign you in. Please check your email and password and try again.";
         setError(backendMsg);
-        return { success: false, error: backendMsg };
+        return {
+          success: false,
+          isUnconfirmed,
+          email: cleanEmail,
+          error: backendMsg,
+        };
       }
 
       // Fallback clean message
@@ -288,11 +298,40 @@ export const AuthProvider = ({ children }) => {
    */
   const confirmAccount = async (email, code) => {
     setError(null);
+    const cleanEmail = (email || '').trim().toLowerCase();
     try {
-      const res = await confirmSignUpCognito({ email, code });
-      return res;
+      // 1. Try direct AWS Cognito client confirmation
+      let directRes = await confirmSignUpCognito({ email: cleanEmail, code });
+
+      // 2. Also notify backend to update local/Dynamo database record
+      try {
+        await apiConfirmCognitoAccount(cleanEmail, code);
+      } catch (backendErr) {
+        if (!directRes.success && backendErr.response?.data?.success) {
+          directRes = { success: true, message: 'Account confirmed successfully!' };
+        }
+      }
+
+      return directRes;
     } catch (err) {
       return { success: false, error: err.message };
+    }
+  };
+
+  /**
+   * Emergency/Admin direct confirmation when Cognito default email is delayed/in spam
+   */
+  const adminConfirmAccount = async (email) => {
+    setError(null);
+    const cleanEmail = (email || '').trim().toLowerCase();
+    try {
+      const res = await apiAdminConfirmCognitoAccount(cleanEmail);
+      return res.data;
+    } catch (err) {
+      return {
+        success: false,
+        error: err.response?.data?.error?.message || err.message,
+      };
     }
   };
 
@@ -350,6 +389,7 @@ export const AuthProvider = ({ children }) => {
     login,
     register,
     confirmAccount,
+    adminConfirmAccount,
     resendCode,
     requestPasswordReset,
     resetPassword,

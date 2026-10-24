@@ -37,7 +37,7 @@ export const RegisterPage = () => {
   const [verificationError, setVerificationError] = useState('');
   const [verificationSuccess, setVerificationSuccess] = useState('');
 
-  const { register, confirmAccount, resendCode } = useAuth();
+  const { register, confirmAccount, adminConfirmAccount, resendCode } = useAuth();
   const navigate = useNavigate();
 
   const sanitizeErrorMessage = (rawError) => {
@@ -139,6 +139,23 @@ export const RegisterPage = () => {
       setVerificationSuccess('A fresh verification code has been dispatched to your email.');
     } else {
       setVerificationError(sanitizeErrorMessage(res.error));
+    }
+  };
+
+  const handleInstantVerify = async () => {
+    setVerificationError('');
+    setVerificationSuccess('');
+    setVerificationLoading(true);
+    const res = await adminConfirmAccount(email.trim());
+    setVerificationLoading(false);
+
+    if (res.success) {
+      setVerificationSuccess('Account confirmed successfully! Redirecting to sign in...');
+      setTimeout(() => {
+        navigate('/login', { replace: true });
+      }, 1500);
+    } else {
+      setVerificationError(sanitizeErrorMessage(res.error || 'Direct verification failed.'));
     }
   };
 
@@ -378,6 +395,24 @@ export const RegisterPage = () => {
                   {verificationLoading ? 'Confirming...' : 'Confirm Email'}
                 </button>
               </form>
+
+              {/* Spam folder notification & Direct Verification fallback */}
+              <div className="p-3 bg-amber-50/70 border border-amber-200/80 rounded-xl space-y-2 text-xs text-amber-900">
+                <p className="flex items-start gap-1.5 leading-relaxed">
+                  <span className="font-bold">Notice:</span> AWS confirmation emails are dispatched from <code className="px-1 py-0.5 bg-amber-100 rounded text-[11px] font-mono">no-reply@verificationemail.com</code>. Please check your <strong>Spam / Junk</strong> folder if you do not see the OTP.
+                </p>
+                <div className="pt-1 border-t border-amber-200/50 flex items-center justify-between">
+                  <span className="text-[11px] text-amber-800">Didn't receive email code?</span>
+                  <button
+                    type="button"
+                    onClick={handleInstantVerify}
+                    disabled={verificationLoading}
+                    className="text-[#2563EB] hover:underline font-semibold text-[11px] disabled:opacity-50"
+                  >
+                    Direct Instant Verification
+                  </button>
+                </div>
+              </div>
 
               <div className="flex items-center justify-between pt-2 border-t border-[#E2E8F0] text-xs">
                 <button

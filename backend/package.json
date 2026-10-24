@@ -8,6 +8,7 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "package:lambda": "tar -a -cf lambda-deployment.zip src node_modules lambda.js package.json",
+    "deploy:lambda": "node scripts/deploy-lambda.js",
     "setup:aws": "node scripts/setup-aws-resources.js",
     "assign-teacher": "node scripts/assign-teacher-role.js"
   },

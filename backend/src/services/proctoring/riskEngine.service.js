@@ -352,26 +352,39 @@ export const evaluateProctoringRisk = (attempt, eventData) => {
  * - Severe single events: Identity mismatch, repeated multiple faces, phone detected
  */
 export const evaluateSnsAlertTrigger = (attempt, newScore, eventType) => {
-  const severeEvents = ['IDENTITY_MISMATCH', 'PHONE_DETECTED'];
-  const isSevereEvent =
-    severeEvents.includes(eventType) ||
-    (eventType === 'MULTIPLE_FACES' && (attempt.multipleFaceCount || 0) >= 2);
+  const severeEvents = [
+    'IDENTITY_MISMATCH',
+    'PHONE_DETECTED',
+    'MULTIPLE_FACES',
+    'SUSTAINED_ABSENCE',
+    'SUSTAINED_ABSENCE_CRITICAL',
+    'TAB_SWITCH',
+  ];
+  const isSevereEvent = severeEvents.includes(eventType);
+  const now = Date.now();
 
-  const lastLevel = attempt.lastSnsAlertLevel;
+  attempt.lastAlertTimestamp = attempt.lastAlertTimestamp || 0;
+  attempt.alertedEvents = attempt.alertedEvents || new Set();
 
-  // Severe single event trigger
-  if (isSevereEvent && lastLevel !== 'CRITICAL') {
-    attempt.lastSnsAlertLevel = newScore >= 80 ? 'CRITICAL' : 'WARNING';
+  const timeSinceLastAlert = now - attempt.lastAlertTimestamp;
+  const isNewBreachType = isSevereEvent && !attempt.alertedEvents.has(eventType);
+
+  // Severe single event trigger (immediate if new breach type or at least 15s elapsed)
+  if (isSevereEvent && (isNewBreachType || timeSinceLastAlert >= 15000)) {
+    attempt.lastAlertTimestamp = now;
+    if (attempt.alertedEvents.add) attempt.alertedEvents.add(eventType);
+    attempt.lastSnsAlertLevel = newScore >= 70 ? 'CRITICAL' : 'WARNING';
     return {
       shouldAlert: true,
-      alertLevel: newScore >= 80 ? 'CRITICAL' : 'WARNING',
-      reason: `Immediate severe breach detected: ${eventType}`,
+      alertLevel: attempt.lastSnsAlertLevel,
+      reason: `Proctoring alert: ${eventType.replace(/_/g, ' ')} detected during exam`,
     };
   }
 
-  // Critical escalation bracket (80 - 100)
-  if (newScore >= 80) {
-    if (lastLevel !== 'CRITICAL') {
+  // Critical escalation bracket (>= 70)
+  if (newScore >= 70) {
+    if (attempt.lastSnsAlertLevel !== 'CRITICAL' || timeSinceLastAlert >= 30000) {
+      attempt.lastAlertTimestamp = now;
       attempt.lastSnsAlertLevel = 'CRITICAL';
       return {
         shouldAlert: true,
@@ -382,9 +395,10 @@ export const evaluateSnsAlertTrigger = (attempt, newScore, eventType) => {
     return { shouldAlert: false, reason: 'Duplicate CRITICAL alert prevented' };
   }
 
-  // Warning escalation bracket (50 - 79)
-  if (newScore >= 50) {
-    if (lastLevel !== 'WARNING' && lastLevel !== 'CRITICAL') {
+  // Warning escalation bracket (>= 25)
+  if (newScore >= 25) {
+    if (timeSinceLastAlert >= 30000 || (!attempt.lastSnsAlertLevel)) {
+      attempt.lastAlertTimestamp = now;
       attempt.lastSnsAlertLevel = 'WARNING';
       return {
         shouldAlert: true,
@@ -395,7 +409,7 @@ export const evaluateSnsAlertTrigger = (attempt, newScore, eventType) => {
     return { shouldAlert: false, reason: 'Duplicate WARNING alert prevented' };
   }
 
-  return { shouldAlert: false, reason: 'Score below alert threshold (<50)' };
+  return { shouldAlert: false, reason: 'Score below alert threshold (<25)' };
 };
 
 /**
