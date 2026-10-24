@@ -14,6 +14,7 @@ import {
   GraduationCap,
   Briefcase,
   ChevronRight,
+  Users,
 } from 'lucide-react';
 
 export const Sidebar = ({ isOpen, setIsOpen }) => {

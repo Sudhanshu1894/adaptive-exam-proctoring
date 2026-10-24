@@ -10,11 +10,13 @@ import TeacherDashboard from './pages/teacher/TeacherDashboard';
 import StudentDashboard from './pages/student/StudentDashboard';
 import ExamArena from './pages/student/ExamArena';
 import NotFoundPage from './pages/NotFoundPage';
+import ErrorBoundary from './components/common/ErrorBoundary';
 
 export const App = () => {
   return (
-    <AuthProvider>
-      <Routes>
+    <ErrorBoundary>
+      <AuthProvider>
+        <Routes>
         <Route element={<AppShell />}>
           {/* Public Landing & Authentication Routes */}
           <Route path="/" element={<LandingPage />} />
@@ -87,6 +89,7 @@ export const App = () => {
         </Route>
       </Routes>
     </AuthProvider>
+  </ErrorBoundary>
   );
 };
 
