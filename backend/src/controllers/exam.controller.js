@@ -23,20 +23,27 @@ export const createExam = async (req, res, next) => {
     const {
       title,
       description,
+      courseId,
       courseCode,
+      slot,
+      instructions,
+      startTime,
+      endTime,
       durationMinutes,
+      maxAttempts,
       passingMarks,
       questions,
       proctoringSettings,
       creatorEmail,
       status,
       assignedStudentEmails,
+      resultsPolicy,
     } = req.body;
 
-    if (!title || !courseCode || !durationMinutes) {
+    if (!title || (!courseCode && !courseId) || !durationMinutes) {
       return res.status(400).json({
         success: false,
-        error: { message: 'Title, course code, and duration are required.' },
+        error: { message: 'Title, course assignment, and duration in minutes are required.' },
       });
     }
 
@@ -44,14 +51,21 @@ export const createExam = async (req, res, next) => {
       {
         title,
         description,
-        courseCode,
+        courseId: courseId || null,
+        courseCode: courseCode || 'GENERAL-101',
+        slot: slot || 'A1',
+        instructions: instructions || '',
+        startTime: startTime || null,
+        endTime: endTime || null,
         durationMinutes: Number(durationMinutes),
+        maxAttempts: Number(maxAttempts) || 1,
         passingMarks: Number(passingMarks) || 0,
         questions: questions || [],
         proctoringSettings: proctoringSettings || {},
         creatorEmail: creatorEmail ? creatorEmail.trim().toLowerCase() : undefined,
         assignedStudentEmails: parseStudentEmails(assignedStudentEmails),
         status: status || 'draft',
+        resultsPolicy: resultsPolicy || undefined,
       },
       req.user
     );
@@ -193,6 +207,24 @@ export const getExamAnalytics = async (req, res, next) => {
     res.status(200).json({
       success: true,
       data: results,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const updateResultsPolicy = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const teacherId = req.user.id || req.user._id;
+    const policyPayload = req.body;
+
+    const updatedExam = await examService.updateExamResultsPolicy(id, policyPayload, teacherId);
+
+    res.status(200).json({
+      success: true,
+      message: 'Examination results and answer review policy updated successfully.',
+      data: { exam: updatedExam },
     });
   } catch (error) {
     next(error);

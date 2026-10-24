@@ -99,6 +99,65 @@ const examSchema = new mongoose.Schema(
       tabSwitchLimit: { type: Number, default: 3 },
       maxRiskThreshold: { type: Number, default: 50 },
     },
+    courseId: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    slot: {
+      type: String,
+      default: 'A1',
+      trim: true,
+    },
+    instructions: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    startTime: {
+      type: Date,
+      default: null,
+    },
+    endTime: {
+      type: Date,
+      default: null,
+    },
+    maxAttempts: {
+      type: Number,
+      default: 1,
+      min: 1,
+    },
+    resultsPolicy: {
+      releaseMode: {
+        type: String,
+        enum: ['immediate', 'scheduled', 'manual'],
+        default: 'immediate',
+      },
+      releaseDate: {
+        type: Date,
+        default: null,
+      },
+      showScore: {
+        type: Boolean,
+        default: true,
+      },
+      showCorrectAnswers: {
+        type: Boolean,
+        default: true,
+      },
+      allowReview: {
+        type: Boolean,
+        default: true,
+      },
+      showExplanations: {
+        type: Boolean,
+        default: true,
+      },
+      isResultsReleased: {
+        type: Boolean,
+        default: true,
+      },
+    },
     startDate: {
       type: Date,
       default: null,

@@ -9,6 +9,7 @@ import {
   deleteExam,
   togglePublishStatus,
   getExamAnalytics,
+  updateResultsPolicy,
   getAvailableExams,
   startAttempt,
   saveAnswer,
@@ -37,6 +38,7 @@ router.get('/teacher/:id', protect, requireTeacher, getExamDetails);
 router.put('/teacher/:id', protect, requireTeacher, updateExam);
 router.delete('/teacher/:id', protect, requireTeacher, deleteExam);
 router.patch('/teacher/:id/publish', protect, requireTeacher, togglePublishStatus);
+router.patch('/teacher/:id/results-policy', protect, requireTeacher, updateResultsPolicy);
 router.get('/teacher/:id/analytics', protect, requireTeacher, getExamAnalytics);
 
 // ==========================================

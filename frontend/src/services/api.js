@@ -146,6 +146,20 @@ export const apiUpdateExam = async (id, examData) => apiClient.put(`/exams/teach
 export const apiDeleteExam = async (id) => apiClient.delete(`/exams/teacher/${id}`);
 export const apiTogglePublishExam = async (id, status) => apiClient.patch(`/exams/teacher/${id}/publish`, { status });
 export const apiGetExamAnalytics = async (id) => apiClient.get(`/exams/teacher/${id}/analytics`);
+export const apiUpdateExamResultsPolicy = async (id, policy) => apiClient.patch(`/exams/teacher/${id}/results-policy`, policy);
+
+/**
+ * LMS Courses & Student Enrollment Management
+ */
+export const apiGetTeacherCourses = async () => apiClient.get('/courses/teacher');
+export const apiCreateCourse = async (courseData) => apiClient.post('/courses', courseData);
+export const apiGetCourseDetails = async (courseId) => apiClient.get(`/courses/${courseId}`);
+export const apiEnrollStudentInCourse = async (courseId, { rollNo, email }) =>
+  apiClient.post(`/courses/${courseId}/students`, { rollNo, email });
+export const apiBulkEnrollStudents = async (courseId, students) =>
+  apiClient.post(`/courses/${courseId}/students/bulk`, { students });
+export const apiRemoveStudentFromCourse = async (courseId, identifier) =>
+  apiClient.delete(`/courses/${courseId}/students/${encodeURIComponent(identifier)}`);
 
 export const apiGetAvailableExams = async (teacherEmail = '') => {
   const query = teacherEmail ? `?teacherEmail=${encodeURIComponent(teacherEmail)}` : '';

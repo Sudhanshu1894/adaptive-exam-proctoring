@@ -435,6 +435,8 @@ export const ExamArena = () => {
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-50 text-[#2563EB] border border-blue-200 text-xs font-semibold">
             <span>{exam?.courseCode || 'ASSESSMENT'}</span>
             <span>•</span>
+            <span>Slot {exam?.slot || 'A1'}</span>
+            <span>•</span>
             <span>Proctored Assessment</span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-extrabold text-[#172033] tracking-tight">{exam?.title}</h1>
@@ -442,6 +444,16 @@ export const ExamArena = () => {
             Please test your camera device before starting the assessment. Your proctored session will operate securely in fullscreen mode.
           </p>
         </div>
+
+        {/* Exam Instructions if provided by teacher */}
+        {exam?.instructions && (
+          <div className="p-4 rounded-xl bg-blue-50/60 border border-blue-200 text-left space-y-1 text-xs">
+            <span className="font-bold text-[#2563EB] flex items-center gap-1.5">
+              <AlertCircle className="w-4 h-4" /> Instructor Instructions
+            </span>
+            <p className="text-[#172033] whitespace-pre-line leading-relaxed">{exam.instructions}</p>
+          </div>
+        )}
 
         {/* Exam Quick Specs */}
         <div className="grid grid-cols-3 gap-3 p-4 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0]">
@@ -570,39 +582,54 @@ export const ExamArena = () => {
 
   // Examination Results Screen
   if (examResult) {
-    const isPassed = examResult.isPassed ?? (examResult.score >= (exam?.passingMarks || 10));
+    const isPendingRelease = examResult.resultsStatus === 'pending_release';
+    const hasScore = examResult.score !== undefined && examResult.score !== null;
+    const isPassed = hasScore ? (examResult.isPassed ?? (examResult.score >= (exam?.passingMarks || 10))) : true;
 
     return (
       <div className="max-w-lg mx-auto my-12 bg-white border border-[#E2E8F0] rounded-2xl p-8 text-center space-y-6 shadow-sm">
         <div className={`h-14 w-14 rounded-2xl mx-auto flex items-center justify-center ${
-          isPassed ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'
+          isPendingRelease ? 'bg-blue-50 text-[#2563EB]' : isPassed ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'
         }`}>
-          {isPassed ? <CheckCircle2 className="w-8 h-8" /> : <AlertTriangle className="w-8 h-8" />}
+          {isPendingRelease ? <Clock className="w-8 h-8" /> : isPassed ? <CheckCircle2 className="w-8 h-8" /> : <AlertTriangle className="w-8 h-8" />}
         </div>
 
         <div className="space-y-1">
           <h2 className="text-2xl font-extrabold text-[#172033]">
-            {isPassed ? 'Assessment Completed' : 'Examination Submitted'}
+            {isPendingRelease ? 'Examination Submitted Successfully' : isPassed ? 'Assessment Completed' : 'Examination Submitted'}
           </h2>
           <p className="text-xs text-[#64748B]">
-            Your examination responses have been recorded and cryptographically sealed.
+            {isPendingRelease
+              ? (examResult.resultsMessage || 'Your answers have been cryptographically recorded. Results are pending release by your instructor.')
+              : 'Your examination responses have been recorded and evaluated.'}
           </p>
         </div>
 
         <div className="p-5 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] space-y-3">
-          <div className="flex items-center justify-between text-xs pb-2 border-b border-[#E2E8F0]">
-            <span className="text-[#64748B]">Score Achieved:</span>
-            <span className="font-bold text-[#172033] text-sm">
-              {examResult.score} / {exam?.totalMarks || 20} pts
-            </span>
-          </div>
+          {hasScore ? (
+            <>
+              <div className="flex items-center justify-between text-xs pb-2 border-b border-[#E2E8F0]">
+                <span className="text-[#64748B]">Score Achieved:</span>
+                <span className="font-bold text-[#172033] text-sm">
+                  {examResult.score} / {exam?.totalMarks || 20} pts
+                </span>
+              </div>
 
-          <div className="flex items-center justify-between text-xs pb-2 border-b border-[#E2E8F0]">
-            <span className="text-[#64748B]">Assessment Status:</span>
-            <span className={`font-bold ${isPassed ? 'text-emerald-600' : 'text-rose-600'}`}>
-              {isPassed ? 'Passed' : 'Needs Review'}
-            </span>
-          </div>
+              <div className="flex items-center justify-between text-xs pb-2 border-b border-[#E2E8F0]">
+                <span className="text-[#64748B]">Assessment Result:</span>
+                <span className={`font-bold ${isPassed ? 'text-emerald-600' : 'text-rose-600'}`}>
+                  {isPassed ? 'Passed' : 'Needs Review'}
+                </span>
+              </div>
+            </>
+          ) : (
+            <div className="flex items-center justify-between text-xs pb-2 border-b border-[#E2E8F0]">
+              <span className="text-[#64748B]">Results Visibility:</span>
+              <span className="font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
+                Shielded (Pending Instructor Release)
+              </span>
+            </div>
+          )}
 
           <div className="flex items-center justify-between text-xs">
             <span className="text-[#64748B]">Proctoring Risk Level:</span>
@@ -615,7 +642,7 @@ export const ExamArena = () => {
         <button
           type="button"
           onClick={() => navigate('/student')}
-          className="w-full py-2.5 rounded-xl bg-[#2563EB] hover:bg-blue-700 text-white font-semibold text-xs shadow-xs transition-colors"
+          className="w-full py-2.5 rounded-xl bg-[#2563EB] hover:bg-blue-700 text-white font-semibold text-xs shadow-xs transition-colors cursor-pointer"
         >
           Return to Student Dashboard
         </button>

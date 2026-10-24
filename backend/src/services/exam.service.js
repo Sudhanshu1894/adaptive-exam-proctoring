@@ -49,6 +49,142 @@ export const sanitizeQuestionsForStudent = (questions) => {
 };
 
 /**
+ * Evaluates whether exam results are currently released based on the teacher's policy
+ */
+export const isExamResultsReleased = (exam) => {
+  if (!exam) return false;
+  const policy = exam.resultsPolicy || {};
+  const releaseMode = policy.releaseMode || 'immediate';
+
+  if (releaseMode === 'immediate') {
+    return true;
+  }
+  if (releaseMode === 'scheduled') {
+    if (!policy.releaseDate) return false;
+    return new Date() >= new Date(policy.releaseDate);
+  }
+  if (releaseMode === 'manual') {
+    return policy.isResultsReleased === true;
+  }
+  return true;
+};
+
+/**
+ * Sanitizes an attempt for student consumption based strictly on the teacher's results and answer review policy.
+ * Students must NEVER receive hidden answers, unreleased marks, or unauthorized result data through API responses.
+ */
+export const sanitizeAttemptForStudent = (attempt, exam) => {
+  if (!attempt) return null;
+  const rawAttempt = attempt.toObject ? attempt.toObject() : { ...attempt };
+  const rawExam = exam && exam.toObject ? exam.toObject() : (exam || {});
+  const policy = rawExam.resultsPolicy || {};
+
+  const isReleased = isExamResultsReleased(rawExam);
+
+  // If results are NOT released yet:
+  if (!isReleased) {
+    return {
+      _id: rawAttempt._id || rawAttempt.sessionId,
+      sessionId: rawAttempt.sessionId || rawAttempt._id,
+      attemptId: rawAttempt.sessionId || rawAttempt._id,
+      examId: rawAttempt.examId || rawAttempt.exam,
+      studentId: rawAttempt.studentId || rawAttempt.student,
+      examTitle: rawAttempt.examTitle || rawExam.title,
+      courseCode: rawAttempt.courseCode || rawExam.courseCode,
+      slot: rawExam.slot || 'A1',
+      status: rawAttempt.status,
+      startTime: rawAttempt.startTime,
+      endTime: rawAttempt.endTime,
+      durationMinutes: rawAttempt.durationMinutes,
+      resultsStatus: 'pending_release',
+      resultsMessage: policy.releaseMode === 'scheduled' && policy.releaseDate
+        ? `Results scheduled for release on ${new Date(policy.releaseDate).toLocaleString()}`
+        : 'Results are pending instructor review and release.',
+      isResultsReleased: false,
+      resultsPolicy: {
+        releaseMode: policy.releaseMode || 'manual',
+        releaseDate: policy.releaseDate || null,
+        showScore: policy.showScore !== false,
+        showCorrectAnswers: policy.showCorrectAnswers !== false,
+        allowReview: policy.allowReview !== false,
+        showExplanations: policy.showExplanations !== false,
+      },
+    };
+  }
+
+  // Results ARE released: Enforce granular visibility controls
+  const showScore = policy.showScore !== false;
+  const showCorrectAnswers = policy.showCorrectAnswers !== false;
+  const allowReview = policy.allowReview !== false;
+  const showExplanations = policy.showExplanations !== false;
+
+  const sanitized = {
+    ...rawAttempt,
+    resultsStatus: 'released',
+    isResultsReleased: true,
+    resultsPolicy: {
+      releaseMode: policy.releaseMode || 'immediate',
+      releaseDate: policy.releaseDate || null,
+      showScore,
+      showCorrectAnswers,
+      allowReview,
+      showExplanations,
+    },
+  };
+
+  // 1. Show or hide scores
+  if (!showScore) {
+    delete sanitized.score;
+    delete sanitized.totalMarks;
+    delete sanitized.percentage;
+    delete sanitized.isPassed;
+  }
+
+  // 2. Allow or disallow answer review
+  if (!allowReview) {
+    delete sanitized.answers;
+  } else if (Array.isArray(sanitized.answers)) {
+    // If review is allowed, process questions and answer details
+    const questionMap = new Map();
+    (rawExam.questions || []).forEach((q) => {
+      const qId = (q._id || q.questionId || q.id).toString();
+      questionMap.set(qId, q);
+    });
+
+    sanitized.answers = sanitized.answers.map((ans) => {
+      const qId = (ans.questionId || ans._id || '').toString();
+      const originalQ = questionMap.get(qId) || {};
+      const answerCopy = { ...ans };
+
+      // Attach question text and options for display in review
+      answerCopy.questionText = originalQ.text || originalQ.question || '';
+      answerCopy.options = originalQ.options || [];
+      answerCopy.maxMarks = originalQ.marks || 1;
+
+      // 3. Show or hide correct answers
+      if (showCorrectAnswers) {
+        answerCopy.correctOptionIndex = originalQ.correctOptionIndex;
+      } else {
+        delete answerCopy.correctOptionIndex;
+        delete answerCopy.isCorrect;
+        delete answerCopy.marksAwarded;
+      }
+
+      // 4. Show or hide explanations
+      if (showExplanations && originalQ.explanation) {
+        answerCopy.explanation = originalQ.explanation;
+      } else {
+        delete answerCopy.explanation;
+      }
+
+      return answerCopy;
+    });
+  }
+
+  return sanitized;
+};
+
+/**
  * Teacher: Create new exam
  */
 export const createExam = async (examData, teacherUser) => {
@@ -57,8 +193,38 @@ export const createExam = async (examData, teacherUser) => {
     0
   );
 
+  let courseInfo = null;
+  if (examData.courseId) {
+    try {
+      courseInfo = await dynamoService.getCourse(examData.courseId);
+    } catch {
+      courseInfo = null;
+    }
+  }
+
+  const resultsPolicy = {
+    releaseMode: examData.resultsPolicy?.releaseMode || 'immediate',
+    releaseDate: examData.resultsPolicy?.releaseDate || null,
+    showScore: examData.resultsPolicy?.showScore !== false,
+    showCorrectAnswers: examData.resultsPolicy?.showCorrectAnswers !== false,
+    allowReview: examData.resultsPolicy?.allowReview !== false,
+    showExplanations: examData.resultsPolicy?.showExplanations !== false,
+    isResultsReleased: examData.resultsPolicy?.isResultsReleased !== undefined
+      ? !!examData.resultsPolicy.isResultsReleased
+      : (examData.resultsPolicy?.releaseMode === 'immediate'),
+  };
+
   const payload = {
     ...examData,
+    courseId: examData.courseId || null,
+    courseCode: courseInfo ? courseInfo.courseCode : (examData.courseCode || 'GENERAL-101'),
+    courseTitle: courseInfo ? courseInfo.title : (examData.courseTitle || ''),
+    slot: courseInfo ? courseInfo.slot : (examData.slot || 'A1'),
+    instructions: examData.instructions || '',
+    startTime: examData.startTime || null,
+    endTime: examData.endTime || null,
+    maxAttempts: Number(examData.maxAttempts) || 1,
+    resultsPolicy,
     creator: teacherUser.id || teacherUser._id,
     creatorName: teacherUser.name,
     creatorEmail: (examData.creatorEmail || teacherUser.email || '').toLowerCase().trim(),
@@ -238,7 +404,7 @@ export const setExamPublishStatus = async (examId, status, teacherId) => {
 };
 
 /**
- * Student: Get all published exams
+ * Student: Get all published exams filtered strictly by enrolled courses and schedule
  */
 export const getAvailableExamsForStudent = async (studentId, teacherEmailFilter = null, studentEmail = null) => {
   let publishedExams = [];
@@ -268,17 +434,35 @@ export const getAvailableExamsForStudent = async (studentId, teacherEmailFilter 
     });
   }
 
-  // Filter by student email: Only the 1 onboarding mock test is open to everyone.
-  // All other teacher-created exams are ONLY visible to students explicitly assigned by the teacher.
   const normalizedStudentEmail = (studentEmail || '').toLowerCase().trim();
+
+  // Retrieve courses in which this student is officially enrolled
+  let studentEnrolledCourses = [];
+  try {
+    studentEnrolledCourses = await dynamoService.listCoursesByStudent(normalizedStudentEmail);
+  } catch (err) {
+    console.warn('[Student Courses List Warning]', err.message);
+  }
+
+  const enrolledCourseIds = new Set(studentEnrolledCourses.map((c) => c.courseId));
+  const enrolledCourseCodes = new Set(studentEnrolledCourses.map((c) => c.courseCode));
+
+  // Filter exams: Students must ONLY access quizzes for course sections in which they are enrolled.
   publishedExams = publishedExams.filter((exam) => {
     // Exactly 1 onboarding mock test is open to all students to understand the system
     if (exam.isMockTest || exam.courseCode === 'MOCK-101') return true;
 
+    // Check if quiz is attached to a course section the student is enrolled in
+    if (exam.courseId && enrolledCourseIds.has(exam.courseId)) return true;
+    if (exam.courseCode && enrolledCourseCodes.has(exam.courseCode)) return true;
+
+    // Fallback: Check explicitly assigned emails
     const assigned = Array.isArray(exam.assignedStudentEmails) ? exam.assignedStudentEmails : [];
-    if (assigned.length === 0 || assigned.includes('*')) return true;
-    if (!normalizedStudentEmail) return false;
-    return assigned.some((email) => email.toLowerCase().trim() === normalizedStudentEmail);
+    if (assigned.length > 0 && (assigned.includes('*') || assigned.some((e) => e.toLowerCase().trim() === normalizedStudentEmail))) {
+      return true;
+    }
+
+    return false;
   });
 
   // Check if student has active or completed attempts
@@ -291,41 +475,97 @@ export const getAvailableExamsForStudent = async (studentId, teacherEmailFilter 
     studentAttempts = memoryAttempts.filter((a) => a.student.toString() === studentId.toString());
   }
 
+  const now = new Date();
+
   return publishedExams.map((exam) => {
     const examIdStr = (exam._id || exam.examId).toString();
     const attempts = studentAttempts.filter(
       (a) => (a.exam || a.examId || '').toString() === examIdStr
     );
     const activeAttempt = attempts.find((a) => a.status === 'in_progress');
-    const completedAttempt = attempts.find((a) => a.status === 'completed' || a.status === 'timed_out');
-    const assigned = Array.isArray(exam.assignedStudentEmails) ? exam.assignedStudentEmails : [];
+    const completedAttempts = attempts.filter((a) => a.status === 'completed' || a.status === 'timed_out');
+    const lastCompletedAttempt = completedAttempts[0] || null;
+
+    const maxAttempts = Number(exam.maxAttempts) || 1;
+    const attemptsUsed = completedAttempts.length;
+    const attemptsRemaining = Math.max(0, maxAttempts - attemptsUsed);
+
+    // Schedule evaluation
+    const startTimeObj = exam.startTime ? new Date(exam.startTime) : null;
+    const endTimeObj = exam.endTime ? new Date(exam.endTime) : null;
+
+    const isUpcoming = startTimeObj && startTimeObj > now;
+    const isClosed = endTimeObj && endTimeObj <= now;
+    const isOpen = (!startTimeObj || startTimeObj <= now) && (!endTimeObj || endTimeObj > now);
+
+    const hasActiveAttempt = !!activeAttempt;
+    const hasAttempted = completedAttempts.length > 0;
+    const canAttempt = isOpen && attemptsRemaining > 0 && !hasActiveAttempt;
+    const canResume = hasActiveAttempt;
+
+    // Determine LMS quiz status category
+    let lmsStatus = 'available_now';
+    if (hasActiveAttempt) {
+      lmsStatus = 'in_progress';
+    } else if (isUpcoming) {
+      lmsStatus = 'upcoming';
+    } else if (isClosed) {
+      lmsStatus = 'closed';
+    } else if (attemptsRemaining === 0) {
+      lmsStatus = 'completed';
+    } else if (isOpen) {
+      lmsStatus = 'available_now';
+    }
+
+    // Results release status
+    const isReleased = isExamResultsReleased(exam);
 
     return {
       _id: examIdStr,
       examId: examIdStr,
       title: exam.title,
       description: exam.description,
+      instructions: exam.instructions || '',
+      courseId: exam.courseId || null,
       courseCode: exam.courseCode,
+      courseTitle: exam.courseTitle || '',
+      slot: exam.slot || 'A1',
       creatorName: exam.creatorName,
       creatorEmail: exam.creatorEmail || '',
       durationMinutes: exam.durationMinutes,
       totalMarks: exam.totalMarks,
       passingMarks: exam.passingMarks,
       questionCount: (exam.questions || []).length,
-      assignedStudentEmails: assigned,
-      isSpecificallyAssigned: assigned.length > 0 && assigned.some((e) => e.toLowerCase().trim() === normalizedStudentEmail),
-      proctoringSettings: exam.proctoringSettings,
-      hasAttempted: !!completedAttempt,
+      startTime: exam.startTime || null,
+      endTime: exam.endTime || null,
+      maxAttempts,
+      attemptsUsed,
+      attemptsRemaining,
+      lmsStatus,
+      isUpcoming,
+      isOpen,
+      isClosed,
+      canAttempt,
+      canResume,
+      hasAttempted,
+      isResultsReleased: isReleased,
+      resultsPolicy: exam.resultsPolicy || {
+        releaseMode: 'immediate',
+        showScore: true,
+        showCorrectAnswers: true,
+        allowReview: true,
+        showExplanations: true,
+      },
       activeAttemptId: activeAttempt ? (activeAttempt.sessionId || activeAttempt._id) : null,
-      completedAttemptId: completedAttempt ? (completedAttempt.sessionId || completedAttempt._id) : null,
-      score: completedAttempt ? completedAttempt.score : null,
-      isPassed: completedAttempt ? completedAttempt.isPassed : null,
+      completedAttemptId: lastCompletedAttempt ? (lastCompletedAttempt.sessionId || lastCompletedAttempt._id) : null,
+      score: (isReleased && exam.resultsPolicy?.showScore !== false && lastCompletedAttempt) ? lastCompletedAttempt.score : null,
+      isPassed: (isReleased && exam.resultsPolicy?.showScore !== false && lastCompletedAttempt) ? lastCompletedAttempt.isPassed : null,
     };
   });
 };
 
 /**
- * Student: Start examination attempt
+ * Student: Start examination attempt with strict LMS schedule and attempt limit validation
  */
 export const startExamAttempt = async (examId, studentUser) => {
   const exam = await getExamById(examId, false);
@@ -336,40 +576,62 @@ export const startExamAttempt = async (examId, studentUser) => {
     throw new Error('This examination is currently not open or is in draft mode');
   }
 
-  // Guard: Verify student email matches teacher-assigned emails (Only onboarding mock is open to all)
   const studentEmail = (studentUser.email || '').toLowerCase().trim();
   const isMock = exam.isMockTest || exam.courseCode === 'MOCK-101';
+
+  // 1. Enforce Course Section Enrollment
   if (!isMock) {
-    const assigned = Array.isArray(exam.assignedStudentEmails) ? exam.assignedStudentEmails : [];
-    const isAuthorized = assigned.length === 0 || assigned.includes('*') || assigned.some((e) => e.toLowerCase().trim() === studentEmail);
-    if (!isAuthorized) {
+    let isEnrolled = false;
+
+    if (exam.courseId) {
+      const course = await dynamoService.getCourse(exam.courseId);
+      if (course && Array.isArray(course.studentRoster)) {
+        isEnrolled = course.studentRoster.some(
+          (s) => (s.email || '').toLowerCase().trim() === studentEmail
+        );
+      }
+    } else {
+      const assigned = Array.isArray(exam.assignedStudentEmails) ? exam.assignedStudentEmails : [];
+      isEnrolled = assigned.length === 0 || assigned.includes('*') || assigned.some((e) => e.toLowerCase().trim() === studentEmail);
+    }
+
+    if (!isEnrolled) {
       throw new Error(
-        `Access denied: This examination has been assigned by the instructor to specific student emails only. Your account (${studentEmail}) is not authorized.`
+        `Access denied: You are not enrolled in ${exam.courseCode || 'this course'} (Slot ${exam.slot || 'section'}). Contact your instructor.`
       );
     }
   }
 
-  const studentId = studentUser.id || studentUser._id || studentUser.studentId;
-
-  // Check for existing in-progress attempt
-  let existingAttempt = null;
-  if (isDynamoDbMode()) {
-    const studentAttempts = await dynamoService.listStudentSessions(studentId);
-    existingAttempt = studentAttempts.find(
-      (a) => (a.exam || a.examId || '').toString() === examId.toString() && a.status === 'in_progress'
+  // 2. Enforce Scheduled Time Window
+  const now = new Date();
+  if (exam.startTime && new Date(exam.startTime) > now) {
+    throw new Error(
+      `This examination is scheduled to commence at ${new Date(exam.startTime).toLocaleString()}. You cannot access questions before the scheduled start time.`
     );
-  } else if (isMongoConnected()) {
-    existingAttempt = await ExamAttempt.findOne({
-      exam: examId,
-      student: studentId,
-      status: 'in_progress',
-    }).exec();
-  } else {
-    existingAttempt = memoryAttempts.find(
-      (a) => a.exam.toString() === examId.toString() && a.student.toString() === studentId.toString() && a.status === 'in_progress'
+  }
+  if (exam.endTime && new Date(exam.endTime) <= now) {
+    throw new Error(
+      `The closing deadline for this examination (${new Date(exam.endTime).toLocaleString()}) has passed.`
     );
   }
 
+  const studentId = studentUser.id || studentUser._id || studentUser.studentId;
+
+  // 3. Enforce Attempt Limits
+  let studentAttempts = [];
+  if (isDynamoDbMode()) {
+    studentAttempts = await dynamoService.listStudentSessions(studentId);
+  } else if (isMongoConnected()) {
+    studentAttempts = await ExamAttempt.find({ student: studentId }).lean().exec();
+  } else {
+    studentAttempts = memoryAttempts.filter((a) => a.student.toString() === studentId.toString());
+  }
+
+  const examAttempts = studentAttempts.filter(
+    (a) => (a.exam || a.examId || '').toString() === examId.toString()
+  );
+
+  const existingAttempt = examAttempts.find((a) => a.status === 'in_progress');
   if (existingAttempt) {
     const sanitized = sanitizeQuestionsForStudent(exam.questions);
     return {
@@ -380,6 +642,14 @@ export const startExamAttempt = async (examId, studentUser) => {
       },
       questions: sanitized,
     };
+  }
+
+  const completedAttempts = examAttempts.filter(
+    (a) => a.status === 'completed' || a.status === 'timed_out'
+  );
+  const maxAttempts = Number(exam.maxAttempts) || 1;
+  if (completedAttempts.length >= maxAttempts) {
+    throw new Error(`Maximum attempts (${maxAttempts}) reached for this examination.`);
   }
 
   const startTime = new Date();
@@ -403,6 +673,7 @@ export const startExamAttempt = async (examId, studentUser) => {
     examId: examId,
     examTitle: exam.title,
     courseCode: exam.courseCode,
+    slot: exam.slot || 'A1',
     durationMinutes: exam.durationMinutes,
     startTime,
     deadlineTime,
@@ -523,7 +794,7 @@ export const saveStudentAnswer = async (attemptId, studentId, { questionId, sele
 };
 
 /**
- * Student: Submit exam attempt & calculate results
+ * Student: Submit exam attempt, auto-grade, and sanitize results based on teacher visibility policy
  */
 export const submitExamAttempt = async (attemptId, studentId, isTimeout = false) => {
   let attempt = null;
@@ -547,87 +818,93 @@ export const submitExamAttempt = async (attemptId, studentId, isTimeout = false)
     throw new Error('Unauthorized attempt access');
   }
 
-  if (attempt.status === 'completed') {
-    return attempt;
-  }
-
   const exam = await getExamById(attempt.exam || attempt.examId, false);
   if (!exam) {
     throw new Error('Associated examination record not found');
   }
 
-  const endTime = new Date();
-  let score = 0;
-  const questionMap = new Map();
-  (exam.questions || []).forEach((q) => questionMap.set((q._id || q.questionId || q.id).toString(), q));
+  if (attempt.status !== 'completed' && attempt.status !== 'timed_out') {
+    const endTime = new Date();
+    let score = 0;
+    const questionMap = new Map();
+    (exam.questions || []).forEach((q) => questionMap.set((q._id || q.questionId || q.id).toString(), q));
 
-  // Auto-grade each answer
-  const answers = Array.isArray(attempt.answers) ? attempt.answers : [];
-  const gradedAnswers = answers.map((ans) => {
-    const qId = (ans.questionId || ans._id || '').toString();
-    const originalQuestion = questionMap.get(qId);
-    if (!originalQuestion) return ans;
+    // Auto-grade each answer
+    const answers = Array.isArray(attempt.answers) ? attempt.answers : [];
+    const gradedAnswers = answers.map((ans) => {
+      const qId = (ans.questionId || ans._id || '').toString();
+      const originalQuestion = questionMap.get(qId);
+      if (!originalQuestion) return ans;
 
-    const isCorrect =
-      ans.selectedOptionIndex !== null &&
-      Number(ans.selectedOptionIndex) === Number(originalQuestion.correctOptionIndex);
+      const isCorrect =
+        ans.selectedOptionIndex !== null &&
+        Number(ans.selectedOptionIndex) === Number(originalQuestion.correctOptionIndex);
 
-    const marksAwarded = isCorrect ? (originalQuestion.marks || 1) : 0;
-    if (isCorrect) {
-      score += marksAwarded;
+      const marksAwarded = isCorrect ? (originalQuestion.marks || 1) : 0;
+      if (isCorrect) {
+        score += marksAwarded;
+      }
+
+      return {
+        ...(ans.toObject ? ans.toObject() : ans),
+        isCorrect,
+        marksAwarded,
+      };
+    });
+
+    const totalMarks = exam.totalMarks || 1;
+    const percentage = Math.round((score / totalMarks) * 100);
+    const isPassed = score >= (exam.passingMarks || 0);
+
+    attempt.endTime = endTime;
+    attempt.status = isTimeout ? 'timed_out' : 'completed';
+    attempt.answers = gradedAnswers;
+    attempt.score = score;
+    attempt.totalMarks = totalMarks;
+    attempt.percentage = percentage;
+    attempt.isPassed = isPassed;
+
+    // Final Proctoring Summary generation (Section 39)
+    attempt.proctoringSummary = generateProctoringSummary(attempt);
+
+    if (isDynamoDbMode()) {
+      await dynamoService.putSession(attempt);
+    } else if (isMongoConnected()) {
+      await attempt.save();
     }
-
-    return {
-      ...(ans.toObject ? ans.toObject() : ans),
-      isCorrect,
-      marksAwarded,
-    };
-  });
-
-  const totalMarks = exam.totalMarks || 1;
-  const percentage = Math.round((score / totalMarks) * 100);
-  const isPassed = score >= (exam.passingMarks || 0);
-
-  attempt.endTime = endTime;
-  attempt.status = isTimeout ? 'timed_out' : 'completed';
-  attempt.answers = gradedAnswers;
-  attempt.score = score;
-  attempt.totalMarks = totalMarks;
-  attempt.percentage = percentage;
-  attempt.isPassed = isPassed;
-
-  // Final Proctoring Summary generation (Section 39)
-  attempt.proctoringSummary = generateProctoringSummary(attempt);
-
-  if (isDynamoDbMode()) {
-    await dynamoService.putSession(attempt);
-  } else if (isMongoConnected()) {
-    await attempt.save();
   }
 
-  return attempt;
+  // Sanitize return object according to teacher's results and answer review policy
+  return sanitizeAttemptForStudent(attempt, exam);
 };
 
 /**
- * Student: Get all previous exam attempts
+ * Student: Get all previous exam attempts (sanitized per teacher results policy)
  */
 export const getStudentAttempts = async (studentId) => {
+  let sessions = [];
   if (isDynamoDbMode()) {
-    const sessions = await dynamoService.listStudentSessions(studentId);
-    return sessions.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    sessions = await dynamoService.listStudentSessions(studentId);
+  } else if (isMongoConnected()) {
+    sessions = await ExamAttempt.find({ student: studentId }).sort({ createdAt: -1 }).lean().exec();
+  } else {
+    sessions = memoryAttempts.filter((a) => a.student.toString() === studentId.toString());
   }
 
-  if (isMongoConnected()) {
-    return await ExamAttempt.find({ student: studentId }).sort({ createdAt: -1 }).lean().exec();
+  sessions.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+  // Sanitize each attempt using its associated exam's results policy
+  const sanitizedAttempts = [];
+  for (const s of sessions) {
+    const exam = await getExamById(s.exam || s.examId, false);
+    sanitizedAttempts.push(sanitizeAttemptForStudent(s, exam));
   }
 
-  return memoryAttempts
-    .filter((a) => a.student.toString() === studentId.toString())
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  return sanitizedAttempts;
 };
 
 /**
- * Common: Get specific attempt by ID
+ * Common: Get specific attempt by ID (students receive policy-sanitized data; teachers receive full forensic review)
  */
 export const getAttemptById = async (attemptId, userId, role) => {
   let attempt = null;
@@ -648,8 +925,43 @@ export const getAttemptById = async (attemptId, userId, role) => {
     throw new Error('Access denied: You cannot view another student attempt');
   }
 
+  const exam = await getExamById(attempt.exam || attempt.examId, false);
+
+  if (role === 'student') {
+    return sanitizeAttemptForStudent(attempt, exam);
+  }
+
   return attempt;
 };
+
+/**
+ * Teacher: Update independent Results and Answer Review visibility policy
+ */
+export const updateExamResultsPolicy = async (examId, policyData, teacherId) => {
+  const current = await getExamById(examId, false);
+  if (!current) {
+    throw new Error('Examination not found');
+  }
+  if (teacherId && current.creator && current.creator.toString() !== teacherId.toString()) {
+    throw new Error('Unauthorized to modify this examination policy');
+  }
+
+  const existingPolicy = current.resultsPolicy || {};
+  const updatedPolicy = {
+    releaseMode: policyData.releaseMode || existingPolicy.releaseMode || 'immediate',
+    releaseDate: policyData.releaseDate !== undefined ? policyData.releaseDate : existingPolicy.releaseDate,
+    showScore: policyData.showScore !== undefined ? !!policyData.showScore : (existingPolicy.showScore !== false),
+    showCorrectAnswers: policyData.showCorrectAnswers !== undefined ? !!policyData.showCorrectAnswers : (existingPolicy.showCorrectAnswers !== false),
+    allowReview: policyData.allowReview !== undefined ? !!policyData.allowReview : (existingPolicy.allowReview !== false),
+    showExplanations: policyData.showExplanations !== undefined ? !!policyData.showExplanations : (existingPolicy.showExplanations !== false),
+    isResultsReleased: policyData.isResultsReleased !== undefined
+      ? !!policyData.isResultsReleased
+      : (policyData.releaseMode === 'immediate' || existingPolicy.isResultsReleased),
+  };
+
+  return await updateExam(examId, { resultsPolicy: updatedPolicy }, teacherId);
+};
+
 
 /**
  * Teacher: Get exam results & student submissions analytics

@@ -24,9 +24,10 @@ export const Sidebar = ({ isOpen, setIsOpen }) => {
   const isTeacher = location.pathname.startsWith('/teacher') || location.pathname.startsWith('/proctor');
   const isStudent = location.pathname.startsWith('/student');
 
-  // Teacher navigation: Dashboard, My Exams, Create Exam, Student Results, Proctoring Reports, Profile, Sign Out
+  // Teacher navigation: Dashboard, Courses & Students, My Exams, Create Exam, Student Results, Proctoring Reports, Profile, Sign Out
   const teacherNav = [
     { name: 'Dashboard', path: '/teacher', icon: LayoutDashboard, exact: true },
+    { name: 'Courses & Students', path: '/teacher/courses', icon: Users },
     { name: 'My Exams', path: '/teacher/exams', icon: FileText },
     { name: 'Create Exam', path: '/teacher/create-exam', icon: PlusCircle },
     { name: 'Student Results', path: '/teacher/results', icon: BarChart3 },

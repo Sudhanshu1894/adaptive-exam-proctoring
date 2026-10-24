@@ -13,6 +13,7 @@ import mongoose from 'mongoose';
 import { User } from '../../models/User.model.js';
 import { Exam } from '../../models/Exam.model.js';
 import { ExamAttempt } from '../../models/ExamAttempt.model.js';
+import { Course } from '../../models/Course.model.js';
 
 /**
  * Determines whether Amazon DynamoDB is the active primary database.
@@ -50,6 +51,7 @@ const memoryStore = {
   students: new Map(),
   exams: new Map(),
   sessions: new Map(),
+  courses: new Map(),
   flaggedEvents: [],
   riskScores: [],
 };
@@ -984,6 +986,489 @@ export const getRiskScoresBySession = async (sessionId) => {
 };
 
 // =========================================================================
+// 5.1 LMS COURSES & STUDENT ENROLLMENTS (DynamoDB Table: Exams, PK: examId = course#courseId)
+// =========================================================================
+
+const getDefaultCoursesForTeacher = (teacherEmail) => {
+  const normEmail = (teacherEmail || 'teacher@adaptive.edu').toLowerCase().trim();
+  const safeTag = normEmail.replace(/[^a-zA-Z0-9]/g, '_');
+  const now = new Date().toISOString();
+
+  return [
+    {
+      courseId: `crs_ai_a1_${safeTag}`,
+      courseCode: 'CSE401',
+      title: 'Artificial Intelligence',
+      slot: 'A1',
+      teacherEmail: normEmail,
+      teacherId: normEmail,
+      description: 'Foundations of AI, search heuristics, knowledge representation, and neural systems.',
+      studentRoster: [],
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      courseId: `crs_cloud_b1_${safeTag}`,
+      courseCode: 'CSE402',
+      title: 'Cloud Architecture & Distributed Systems',
+      slot: 'B1',
+      teacherEmail: normEmail,
+      teacherId: normEmail,
+      description: 'Microservices, serverless compute, event-driven architectures, and high availability on AWS.',
+      studentRoster: [],
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      courseId: `crs_cyber_c1_${safeTag}`,
+      courseCode: 'CSE403',
+      title: 'Cyber Security & Adaptive Defense',
+      slot: 'C1',
+      teacherEmail: normEmail,
+      teacherId: normEmail,
+      description: 'Identity access management, cryptographic protocols, ethical hacking, and threat mitigation.',
+      studentRoster: [],
+      createdAt: now,
+      updatedAt: now,
+    },
+  ];
+};
+
+export const getCourse = async (courseId) => {
+  if (!courseId) return null;
+  const cleanId = String(courseId).trim();
+
+  if (isDynamoDbMode()) {
+    try {
+      const res = await docClient.send(
+        new GetCommand({
+          TableName: dynamoTables.exams,
+          Key: { examId: `course#${cleanId}` },
+        })
+      );
+      if (res.Item) {
+        return {
+          ...res.Item,
+          courseId: res.Item.courseId || cleanId,
+          _id: res.Item.courseId || cleanId,
+          id: res.Item.courseId || cleanId,
+        };
+      }
+      return null;
+    } catch (err) {
+      logDynamoError('GetItem (Course)', dynamoTables.exams, err);
+      throw new Error(`Failed to retrieve course from DynamoDB: ${err.message}`);
+    }
+  }
+
+  if (isMongoConnected()) {
+    try {
+      const doc = await Course.findOne({ courseId: cleanId }).lean();
+      if (doc) {
+        return { ...doc, _id: doc._id.toString(), id: doc.courseId };
+      }
+    } catch (err) {
+      console.warn('[MongoDB Course Query Notice]', err.message);
+    }
+  }
+
+  return memoryStore.courses.get(cleanId) || null;
+};
+
+export const putCourse = async (courseData) => {
+  const courseId = courseData.courseId || `crs_${Date.now()}`;
+  const now = new Date().toISOString();
+  const teacherEmail = (courseData.teacherEmail || 'instructor@adaptive.edu').toLowerCase().trim();
+
+  const cleanCourse = serializeDates({
+    ...courseData,
+    courseId,
+    _id: courseId,
+    id: courseId,
+    examId: `course#${courseId}`,
+    courseCode: (courseData.courseCode || 'CSE-101').toUpperCase().trim(),
+    title: courseData.title || 'Untitled Course',
+    slot: (courseData.slot || 'A1').toUpperCase().trim(),
+    teacherEmail,
+    teacherId: courseData.teacherId || teacherEmail,
+    description: courseData.description || '',
+    studentRoster: Array.isArray(courseData.studentRoster) ? courseData.studentRoster : [],
+    updatedAt: now,
+    createdAt: courseData.createdAt || now,
+  });
+
+  if (isDynamoDbMode()) {
+    try {
+      // 1. Write primary course item into Exams table
+      await docClient.send(
+        new PutCommand({
+          TableName: dynamoTables.exams,
+          Item: cleanCourse,
+        })
+      );
+
+      // 2. Update teacher's course index
+      const teacherCourseKey = `__teacher_courses__${teacherEmail}`;
+      const tRes = await docClient.send(
+        new GetCommand({
+          TableName: dynamoTables.exams,
+          Key: { examId: teacherCourseKey },
+        })
+      ).catch(() => ({ Item: null }));
+
+      const existingCourses = Array.isArray(tRes.Item?.courseIds) ? tRes.Item.courseIds : [];
+      if (!existingCourses.includes(courseId)) {
+        existingCourses.push(courseId);
+      }
+      await docClient.send(
+        new PutCommand({
+          TableName: dynamoTables.exams,
+          Item: {
+            examId: teacherCourseKey,
+            courseIds: existingCourses,
+            updatedAt: now,
+          },
+        })
+      );
+
+      // 3. Update global course catalog
+      const catRes = await docClient.send(
+        new GetCommand({
+          TableName: dynamoTables.exams,
+          Key: { examId: '__courses_catalog__' },
+        })
+      ).catch(() => ({ Item: null }));
+
+      const existingCatalog = Array.isArray(catRes.Item?.courseIds) ? catRes.Item.courseIds : [];
+      if (!existingCatalog.includes(courseId)) {
+        existingCatalog.push(courseId);
+      }
+      await docClient.send(
+        new PutCommand({
+          TableName: dynamoTables.exams,
+          Item: {
+            examId: '__courses_catalog__',
+            courseIds: existingCatalog,
+            updatedAt: now,
+          },
+        })
+      );
+
+      return cleanCourse;
+    } catch (err) {
+      logDynamoError('PutItem (Course)', dynamoTables.exams, err);
+      throw new Error(`Failed to save course to DynamoDB: ${err.message}`);
+    }
+  }
+
+  if (isMongoConnected()) {
+    try {
+      const updated = await Course.findOneAndUpdate(
+        { courseId },
+        { $set: cleanCourse },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      ).lean();
+      return { ...updated, _id: updated._id.toString(), id: courseId };
+    } catch (err) {
+      console.warn('[MongoDB Course Save Notice]', err.message);
+    }
+  }
+
+  memoryStore.courses.set(courseId, cleanCourse);
+  return cleanCourse;
+};
+
+export const listCoursesByTeacher = async (teacherEmail) => {
+  const normEmail = (teacherEmail || '').toLowerCase().trim();
+
+  if (isDynamoDbMode()) {
+    try {
+      const teacherCourseKey = `__teacher_courses__${normEmail}`;
+      const tRes = await docClient.send(
+        new GetCommand({
+          TableName: dynamoTables.exams,
+          Key: { examId: teacherCourseKey },
+        })
+      );
+
+      let courseIds = Array.isArray(tRes.Item?.courseIds) ? tRes.Item.courseIds : [];
+
+      // Auto-seed default courses if teacher has none yet
+      if (courseIds.length === 0) {
+        const defaults = getDefaultCoursesForTeacher(normEmail);
+        for (const defCourse of defaults) {
+          await putCourse(defCourse);
+        }
+        return defaults;
+      }
+
+      const courses = [];
+      for (const cId of courseIds) {
+        const c = await getCourse(cId);
+        if (c) courses.push(c);
+      }
+      return courses;
+    } catch (err) {
+      logDynamoError('listCoursesByTeacher', dynamoTables.exams, err);
+      throw new Error(`Failed to list teacher courses from DynamoDB: ${err.message}`);
+    }
+  }
+
+  if (isMongoConnected()) {
+    let docs = await Course.find({ teacherEmail: normEmail }).lean();
+    if (docs.length === 0) {
+      const defaults = getDefaultCoursesForTeacher(normEmail);
+      for (const defCourse of defaults) {
+        await Course.create(defCourse);
+      }
+      return defaults;
+    }
+    return docs.map((d) => ({ ...d, _id: d._id.toString(), id: d.courseId }));
+  }
+
+  const all = Array.from(memoryStore.courses.values()).filter(
+    (c) => (c.teacherEmail || '').toLowerCase() === normEmail
+  );
+  if (all.length === 0) {
+    const defaults = getDefaultCoursesForTeacher(normEmail);
+    defaults.forEach((c) => memoryStore.courses.set(c.courseId, c));
+    return defaults;
+  }
+  return all;
+};
+
+export const listCoursesByStudent = async (studentEmail) => {
+  const normEmail = (studentEmail || '').toLowerCase().trim();
+  if (!normEmail) return [];
+
+  if (isDynamoDbMode()) {
+    try {
+      // Fetch all courses in catalog and check roster
+      const catRes = await docClient.send(
+        new GetCommand({
+          TableName: dynamoTables.exams,
+          Key: { examId: '__courses_catalog__' },
+        })
+      ).catch(() => ({ Item: null }));
+
+      const allCourseIds = Array.isArray(catRes.Item?.courseIds) ? catRes.Item.courseIds : [];
+      const enrolledCourses = [];
+
+      for (const cId of allCourseIds) {
+        const c = await getCourse(cId);
+        if (c && Array.isArray(c.studentRoster)) {
+          const isEnrolled = c.studentRoster.some(
+            (s) => (s.email || '').toLowerCase().trim() === normEmail
+          );
+          if (isEnrolled) {
+            enrolledCourses.push(c);
+          }
+        }
+      }
+      return enrolledCourses;
+    } catch (err) {
+      logDynamoError('listCoursesByStudent', dynamoTables.exams, err);
+      return [];
+    }
+  }
+
+  if (isMongoConnected()) {
+    const docs = await Course.find({ 'studentRoster.email': normEmail }).lean();
+    return docs.map((d) => ({ ...d, _id: d._id.toString(), id: d.courseId }));
+  }
+
+  return Array.from(memoryStore.courses.values()).filter((c) =>
+    (c.studentRoster || []).some((s) => (s.email || '').toLowerCase().trim() === normEmail)
+  );
+};
+
+export const enrollStudentInCourse = async (courseId, { rollNo, email }) => {
+  const course = await getCourse(courseId);
+  if (!course) {
+    throw new Error('Course not found');
+  }
+
+  const normRoll = String(rollNo || '').trim().toUpperCase();
+  const normEmail = String(email || '').trim().toLowerCase();
+
+  if (!normRoll) {
+    throw new Error('Registration number (Roll Number) is required.');
+  }
+  if (!normEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normEmail)) {
+    throw new Error('A valid email address (e.g. Gmail) is required.');
+  }
+
+  const existingRoster = Array.isArray(course.studentRoster) ? course.studentRoster : [];
+
+  // 1. Detect duplicate registration number or email in course
+  const dupRoll = existingRoster.find((s) => s.rollNo === normRoll);
+  if (dupRoll) {
+    throw new Error(`Student with registration number "${normRoll}" is already enrolled in this course.`);
+  }
+
+  const dupEmail = existingRoster.find((s) => (s.email || '').toLowerCase() === normEmail);
+  if (dupEmail) {
+    throw new Error(`Student with email "${normEmail}" is already enrolled in this course.`);
+  }
+
+  // 2. Verify identity against existing student profiles in database
+  let existingStudent = null;
+  try {
+    existingStudent = await getStudentByEmail(normEmail);
+  } catch (err) {
+    existingStudent = null;
+  }
+
+  const status = existingStudent ? 'enrolled' : 'pending_verification';
+  const verifiedIdentity = !!existingStudent;
+  const studentId = existingStudent ? (existingStudent.studentId || existingStudent._id) : null;
+  const studentName = existingStudent ? existingStudent.name : null;
+
+  const newEnrollment = {
+    rollNo: normRoll,
+    email: normEmail,
+    studentId,
+    studentName,
+    status,
+    verifiedIdentity,
+    enrolledAt: new Date().toISOString(),
+  };
+
+  course.studentRoster = [...existingRoster, newEnrollment];
+  await putCourse(course);
+
+  return {
+    course,
+    enrollment: newEnrollment,
+    isNewlyVerified: verifiedIdentity,
+  };
+};
+
+export const bulkEnrollStudentsInCourse = async (courseId, studentRecords) => {
+  const course = await getCourse(courseId);
+  if (!course) {
+    throw new Error('Course not found');
+  }
+
+  if (!Array.isArray(studentRecords) || studentRecords.length === 0) {
+    throw new Error('No student enrollment records provided');
+  }
+
+  const existingRoster = Array.isArray(course.studentRoster) ? [...course.studentRoster] : [];
+  const existingRolls = new Set(existingRoster.map((s) => s.rollNo));
+  const existingEmails = new Set(existingRoster.map((s) => (s.email || '').toLowerCase()));
+
+  const seenRollsInBatch = new Set();
+  const seenEmailsInBatch = new Set();
+
+  const errors = [];
+  const validNewEnrollments = [];
+
+  for (let idx = 0; idx < studentRecords.length; idx++) {
+    const raw = studentRecords[idx] || {};
+    const rowNum = idx + 1;
+    const rollNo = String(raw.rollNo || raw.rollNumber || raw.registrationNumber || raw.regNo || '').trim().toUpperCase();
+    const email = String(raw.email || raw.studentEmail || raw.gmail || '').trim().toLowerCase();
+
+    // Validation checks
+    if (!rollNo) {
+      errors.push({ row: rowNum, rollNo, email, reason: 'Registration number is missing.' });
+      continue;
+    }
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      errors.push({ row: rowNum, rollNo, email, reason: 'Invalid or missing email address.' });
+      continue;
+    }
+
+    // Check duplicate in current course roster
+    if (existingRolls.has(rollNo)) {
+      errors.push({ row: rowNum, rollNo, email, reason: `Registration number '${rollNo}' already enrolled.` });
+      continue;
+    }
+    if (existingEmails.has(email)) {
+      errors.push({ row: rowNum, rollNo, email, reason: `Email '${email}' already enrolled.` });
+      continue;
+    }
+
+    // Check duplicate within the uploaded CSV file itself
+    if (seenRollsInBatch.has(rollNo)) {
+      errors.push({ row: rowNum, rollNo, email, reason: `Duplicate registration number '${rollNo}' in uploaded file.` });
+      continue;
+    }
+    if (seenEmailsInBatch.has(email)) {
+      errors.push({ row: rowNum, rollNo, email, reason: `Duplicate email '${email}' in uploaded file.` });
+      continue;
+    }
+
+    seenRollsInBatch.add(rollNo);
+    seenEmailsInBatch.add(email);
+
+    // Verify identity against existing student accounts
+    let existingStudent = null;
+    try {
+      existingStudent = await getStudentByEmail(email);
+    } catch {
+      existingStudent = null;
+    }
+
+    const status = existingStudent ? 'enrolled' : 'pending_verification';
+    const verifiedIdentity = !!existingStudent;
+
+    validNewEnrollments.push({
+      rollNo,
+      email,
+      studentId: existingStudent ? (existingStudent.studentId || existingStudent._id) : null,
+      studentName: existingStudent ? existingStudent.name : null,
+      status,
+      verifiedIdentity,
+      enrolledAt: new Date().toISOString(),
+    });
+  }
+
+  if (validNewEnrollments.length > 0) {
+    course.studentRoster = [...existingRoster, ...validNewEnrollments];
+    await putCourse(course);
+  }
+
+  const enrolledCount = validNewEnrollments.filter((e) => e.status === 'enrolled').length;
+  const pendingCount = validNewEnrollments.filter((e) => e.status === 'pending_verification').length;
+
+  return {
+    success: true,
+    totalProcessed: studentRecords.length,
+    enrolledCount,
+    pendingCount,
+    skippedCount: errors.length,
+    errors,
+    roster: course.studentRoster,
+  };
+};
+
+export const removeStudentFromCourse = async (courseId, studentEmailOrRollNo) => {
+  const course = await getCourse(courseId);
+  if (!course) {
+    throw new Error('Course not found');
+  }
+
+  const target = String(studentEmailOrRollNo || '').trim().toLowerCase();
+  const existingRoster = Array.isArray(course.studentRoster) ? course.studentRoster : [];
+
+  const initialCount = existingRoster.length;
+  course.studentRoster = existingRoster.filter(
+    (s) => s.rollNo?.toLowerCase() !== target && (s.email || '').toLowerCase() !== target
+  );
+
+  if (course.studentRoster.length === initialCount) {
+    throw new Error('Student enrollment record not found in this course.');
+  }
+
+  await putCourse(course);
+  return course;
+};
+
+
+
+// =========================================================================
 // 6. HEALTH & DATABASE STATUS REPORTING
 // =========================================================================
 
@@ -1057,6 +1542,13 @@ export default {
   getFlaggedEventsBySession,
   putRiskScoreRecord,
   getRiskScoresBySession,
+  getCourse,
+  putCourse,
+  listCoursesByTeacher,
+  listCoursesByStudent,
+  enrollStudentInCourse,
+  bulkEnrollStudentsInCourse,
+  removeStudentFromCourse,
   getDatabaseStatus,
   getDynamoStatus,
 };

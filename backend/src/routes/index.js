@@ -3,6 +3,7 @@ import expressToLambda from './apiGateway.adapter.js';
 import healthRoutes from './health.routes.js';
 import authRoutes from './auth.routes.js';
 import examRoutes from './exam.routes.js';
+import courseRoutes from './course.routes.js';
 import awsRoutes from './aws.routes.js';
 
 // Import the 6 AWS Lambda Handlers matching the Architecture Blueprint
@@ -79,7 +80,8 @@ router.post('/session/submit', expressToLambda(sessionHandler));
 router.post('/scoring/telemetry', expressToLambda(scoringHandler));
 router.post('/scoring/event', expressToLambda(scoringHandler));
 
-// 6. Examination routes (Teacher authoring & Student arena)
+// 6. Examination & LMS Course routes (Teacher authoring & Student arena)
+router.use('/courses', courseRoutes);
 router.use('/exams', examRoutes);
 router.post('/serverless/exams', expressToLambda(examsHandler));
 router.get('/serverless/exams', expressToLambda(examsHandler));
